@@ -20,6 +20,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+const NEXT_PUBLIC_RAILWAY_CALL_BACKEND_URL =
+  process.env.NEXT_PUBLIC_RAILWAY_CALL_BACKEND_URL!;
+
 export default function ChecklistAndConfig({
   ready,
   setReady,
@@ -77,7 +80,7 @@ export default function ChecklistAndConfig({
         // 3. Check local server & public URL
         let foundPublicUrl = "";
         try {
-          const resLocal = await fetch("http://localhost:8081/public-url");
+          const resLocal = await fetch(`${NEXT_PUBLIC_RAILWAY_CALL_BACKEND_URL}/public-url`);
           if (resLocal.ok) {
             const pubData = await resLocal.json();
             foundPublicUrl = pubData?.publicUrl || "";

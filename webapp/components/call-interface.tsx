@@ -10,6 +10,9 @@ import { Item } from "@/components/types";
 import handleRealtimeEvent from "@/lib/handle-realtime-event";
 import PhoneNumberChecklist from "@/components/phone-number-checklist";
 
+const NEXT_PUBLIC_RAILWAY_CALL_WS_URL =
+  process.env.NEXT_PUBLIC_RAILWAY_CALL_WS_URL!;
+
 const CallInterface = () => {
   const [selectedPhoneNumber, setSelectedPhoneNumber] = useState("");
   const [allConfigsReady, setAllConfigsReady] = useState(false);
@@ -19,7 +22,7 @@ const CallInterface = () => {
 
   useEffect(() => {
     if (allConfigsReady && !ws) {
-      const newWs = new WebSocket("ws://localhost:8081/logs");
+      const newWs = new WebSocket(`${NEXT_PUBLIC_RAILWAY_CALL_WS_URL}/logs`);
 
       newWs.onopen = () => {
         console.log("Connected to logs websocket");
