@@ -3,7 +3,6 @@ import functions from "./functionHandlers";
 
 interface Session {
   twilioConn?: WebSocket;
-  frontendConn?: WebSocket;
   modelConn?: WebSocket;
   streamSid?: string;
   saved_config?: any;
@@ -13,80 +12,76 @@ interface Session {
   openAIApiKey?: string;
 }
 
-let session: Session = {};
+const sessions: Record<string, Session> = {};
+let frontendConn: WebSocket | undefined = undefined;
 
 export function handleCallConnection(ws: WebSocket, openAIApiKey: string) {
-  cleanupConnection(session.twilioConn);
-  session.twilioConn = ws;
-  session.openAIApiKey = openAIApiKey;
-
-  ws.on("message", handleTwilioMessage);
+  ws.on("message", (data) => handleTwilioMessage(ws, data, openAIApiKey));
   ws.on("error", ws.close);
   ws.on("close", () => {
-    cleanupConnection(session.modelConn);
-    cleanupConnection(session.twilioConn);
-    session.twilioConn = undefined;
-    session.modelConn = undefined;
-    session.streamSid = undefined;
-    session.lastAssistantItem = undefined;
-    session.responseStartTimestamp = undefined;
-    session.latestMediaTimestamp = undefined;
-    if (!session.frontendConn) session = {};
+    for (const [sid, session] of Object.entries(sessions)) {
+      if (session.twilioConn === ws) {
+        cleanupConnection(session.modelConn);
+        cleanupConnection(session.twilioConn);
+        delete sessions[sid];
+      }
+    }
   });
 }
 
 export function handleFrontendConnection(ws: WebSocket) {
-  cleanupConnection(session.frontendConn);
-  session.frontendConn = ws;
-
-  ws.on("message", handleFrontendMessage);
+  frontendConn = ws;
+  ws.on("message", (data) => handleFrontendMessage(ws, data));
   ws.on("close", () => {
-    cleanupConnection(session.frontendConn);
-    session.frontendConn = undefined;
-    if (!session.twilioConn && !session.modelConn) session = {};
+    if (frontendConn === ws) {
+      cleanupConnection(frontendConn);
+      frontendConn = undefined;
+    }
   });
 }
 
-async function handleFunctionCall(item: { name: string; arguments: string }) {
-  console.log("Handling function call:", item);
+async function handleFunctionCall(
+  session: Session,
+  item: { name: string; arguments: string }
+) {
   const fnDef = functions.find((f) => f.schema.name === item.name);
-  if (!fnDef) {
-    throw new Error(`No handler found for function: ${item.name}`);
-  }
+  if (!fnDef)
+    return JSON.stringify({ error: `No handler for function: ${item.name}` });
 
-  let args: unknown;
+  let args;
   try {
     args = JSON.parse(item.arguments);
   } catch {
-    return JSON.stringify({
-      error: "Invalid JSON arguments for function call.",
-    });
+    return JSON.stringify({ error: "Invalid JSON arguments" });
   }
 
   try {
-    console.log("Calling function:", fnDef.schema.name, args);
-    const result = await fnDef.handler(args as any);
+    const result = await fnDef.handler(args);
     return result;
   } catch (err: any) {
-    console.error("Error running function:", err);
-    return JSON.stringify({
-      error: `Error running function ${item.name}: ${err.message}`,
-    });
+    return JSON.stringify({ error: err.message });
   }
 }
 
-function handleTwilioMessage(data: RawData) {
+function handleTwilioMessage(ws: WebSocket, data: RawData, apiKey: string) {
   const msg = parseMessage(data);
   if (!msg) return;
 
+  if (msg.event === "start") {
+    const sid = msg.start.streamSid;
+    sessions[sid] = {
+      twilioConn: ws,
+      streamSid: sid,
+      openAIApiKey: apiKey,
+      latestMediaTimestamp: 0,
+    };
+    tryConnectModel(sid);
+  }
+
+  const session = Object.values(sessions).find((s) => s.twilioConn === ws);
+  if (!session) return;
+
   switch (msg.event) {
-    case "start":
-      session.streamSid = msg.start.streamSid;
-      session.latestMediaTimestamp = 0;
-      session.lastAssistantItem = undefined;
-      session.responseStartTimestamp = undefined;
-      tryConnectModel();
-      break;
     case "media":
       session.latestMediaTimestamp = msg.media.timestamp;
       if (isOpen(session.modelConn)) {
@@ -97,28 +92,31 @@ function handleTwilioMessage(data: RawData) {
       }
       break;
     case "close":
-      closeAllConnections();
+      cleanupConnection(session.twilioConn);
+      cleanupConnection(session.modelConn);
+      if (!frontendConn) delete sessions[session.streamSid!];
       break;
   }
 }
 
-function handleFrontendMessage(data: RawData) {
+function handleFrontendMessage(ws: WebSocket, data: RawData) {
   const msg = parseMessage(data);
   if (!msg) return;
 
-  if (isOpen(session.modelConn)) {
-    jsonSend(session.modelConn, msg);
-  }
-
-  if (msg.type === "session.update") {
-    session.saved_config = msg.session;
+  // Optional: Sende an alle Sessions gleichzeitig (falls nötig)
+  for (const session of Object.values(sessions)) {
+    if (isOpen(session.modelConn)) {
+      jsonSend(session.modelConn, msg);
+    }
+    if (msg.type === "session.update") {
+      session.saved_config = msg.session;
+    }
   }
 }
 
-function tryConnectModel() {
-  if (!session.twilioConn || !session.streamSid || !session.openAIApiKey)
-    return;
-  if (isOpen(session.modelConn)) return;
+function tryConnectModel(sid: string) {
+  const session = sessions[sid];
+  if (!session || session.modelConn || !session.openAIApiKey) return;
 
   session.modelConn = new WebSocket(
     "wss://api.openai.com/v1/realtime?model=gpt-4o-mini-realtime-preview-2024-12-17",
@@ -131,7 +129,6 @@ function tryConnectModel() {
   );
 
   session.modelConn.on("open", () => {
-    const config = session.saved_config || {};
     jsonSend(session.modelConn, {
       type: "session.update",
       session: {
@@ -141,27 +138,26 @@ function tryConnectModel() {
         input_audio_transcription: { model: "whisper-1" },
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
-        ...config,
+        ...session.saved_config,
       },
     });
   });
 
-  session.modelConn.on("message", handleModelMessage);
-  session.modelConn.on("error", closeModel);
-  session.modelConn.on("close", closeModel);
+  session.modelConn.on("message", (data) => handleModelMessage(session, data));
+  session.modelConn.on("error", () => closeModel(session));
+  session.modelConn.on("close", () => closeModel(session));
 }
 
-function handleModelMessage(data: RawData) {
+function handleModelMessage(session: Session, data: RawData) {
   const event = parseMessage(data);
   if (!event) return;
 
-  jsonSend(session.frontendConn, event);
+  jsonSend(frontendConn, event);
 
   switch (event.type) {
     case "input_audio_buffer.speech_started":
-      handleTruncation();
+      handleTruncation(session);
       break;
-
     case "response.audio.delta":
       if (session.twilioConn && session.streamSid) {
         if (session.responseStartTimestamp === undefined) {
@@ -181,34 +177,29 @@ function handleModelMessage(data: RawData) {
         });
       }
       break;
-
     case "response.output_item.done": {
       const { item } = event;
       if (item.type === "function_call") {
-        handleFunctionCall(item)
-          .then((output) => {
-            if (session.modelConn) {
-              jsonSend(session.modelConn, {
-                type: "conversation.item.create",
-                item: {
-                  type: "function_call_output",
-                  call_id: item.call_id,
-                  output: JSON.stringify(output),
-                },
-              });
-              jsonSend(session.modelConn, { type: "response.create" });
-            }
-          })
-          .catch((err) => {
-            console.error("Error handling function call:", err);
-          });
+        handleFunctionCall(session, item).then((output) => {
+          if (session.modelConn) {
+            jsonSend(session.modelConn, {
+              type: "conversation.item.create",
+              item: {
+                type: "function_call_output",
+                call_id: item.call_id,
+                output: JSON.stringify(output),
+              },
+            });
+            jsonSend(session.modelConn, { type: "response.create" });
+          }
+        });
       }
       break;
     }
   }
 }
 
-function handleTruncation() {
+function handleTruncation(session: Session) {
   if (
     !session.lastAssistantItem ||
     session.responseStartTimestamp === undefined
@@ -239,30 +230,12 @@ function handleTruncation() {
   session.responseStartTimestamp = undefined;
 }
 
-function closeModel() {
+function closeModel(session: Session) {
   cleanupConnection(session.modelConn);
   session.modelConn = undefined;
-  if (!session.twilioConn && !session.frontendConn) session = {};
-}
-
-function closeAllConnections() {
-  if (session.twilioConn) {
-    session.twilioConn.close();
-    session.twilioConn = undefined;
+  if (!session.twilioConn && !frontendConn) {
+    delete sessions[session.streamSid!];
   }
-  if (session.modelConn) {
-    session.modelConn.close();
-    session.modelConn = undefined;
-  }
-  if (session.frontendConn) {
-    session.frontendConn.close();
-    session.frontendConn = undefined;
-  }
-  session.streamSid = undefined;
-  session.lastAssistantItem = undefined;
-  session.responseStartTimestamp = undefined;
-  session.latestMediaTimestamp = undefined;
-  session.saved_config = undefined;
 }
 
 function cleanupConnection(ws?: WebSocket) {

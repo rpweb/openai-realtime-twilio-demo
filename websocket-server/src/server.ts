@@ -46,13 +46,10 @@ app.all("/twiml", (req, res) => {
   res.type("text/xml").send(twimlContent);
 });
 
-// New endpoint to list available tools (schemas)
+// Endpoint to expose available tools
 app.get("/tools", (req, res) => {
   res.json(functions.map((f) => f.schema));
 });
-
-let currentCall: WebSocket | null = null;
-let currentLogs: WebSocket | null = null;
 
 wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   const url = new URL(req.url || "", `http://${req.headers.host}`);
@@ -66,18 +63,14 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   const type = parts[0];
 
   if (type === "call") {
-    if (currentCall) currentCall.close();
-    currentCall = ws;
-    handleCallConnection(currentCall, OPENAI_API_KEY);
+    handleCallConnection(ws, OPENAI_API_KEY);
   } else if (type === "logs") {
-    if (currentLogs) currentLogs.close();
-    currentLogs = ws;
-    handleFrontendConnection(currentLogs);
+    handleFrontendConnection(ws);
   } else {
     ws.close();
   }
 });
 
 server.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`✅ Server running on http://localhost:${PORT}`);
 });
