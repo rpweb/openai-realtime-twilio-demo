@@ -24,6 +24,7 @@ export function handleCallConnection(ws: WebSocket, openAIApiKey: string) {
         cleanupConnection(session.modelConn);
         cleanupConnection(session.twilioConn);
         delete sessions[sid];
+        console.log("Closed Twilio connection", sid);
       }
     }
   });
