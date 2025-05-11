@@ -31,7 +31,7 @@ export function handleCallConnection(ws: WebSocket, openAIApiKey: string) {
 
 export function handleFrontendConnection(ws: WebSocket) {
   frontendConn = ws;
-  ws.on("message", (data) => handleFrontendMessage(ws, data));
+  ws.on("message", (data) => handleFrontendMessage(data));
   ws.on("close", () => {
     if (frontendConn === ws) {
       cleanupConnection(frontendConn);
@@ -69,6 +69,7 @@ function handleTwilioMessage(ws: WebSocket, data: RawData, apiKey: string) {
 
   if (msg.event === "start") {
     const sid = msg.start.streamSid;
+    console.log("New Twilio connection", sid);
     sessions[sid] = {
       twilioConn: ws,
       streamSid: sid,
@@ -99,7 +100,7 @@ function handleTwilioMessage(ws: WebSocket, data: RawData, apiKey: string) {
   }
 }
 
-function handleFrontendMessage(ws: WebSocket, data: RawData) {
+function handleFrontendMessage(data: RawData) {
   const msg = parseMessage(data);
   if (!msg) return;
 

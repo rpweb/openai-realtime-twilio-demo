@@ -63,10 +63,13 @@ wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
   const type = parts[0];
 
   if (type === "call") {
+    console.log("New call connection");
     handleCallConnection(ws, OPENAI_API_KEY);
   } else if (type === "logs") {
+    console.log("New log connection");
     handleFrontendConnection(ws);
   } else {
+    console.log("Everything else is closed");
     ws.close();
   }
 });
