@@ -4,7 +4,7 @@
   "description": "Twilio real-time server with TypeScript",
   "main": "dist/server.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp src/twiml.xml dist/",
     "start": "node dist/server.js",
     "dev": "nodemon --watch 'src/**/*' --watch '.env' --ext 'ts,js,xml,env' --exec 'ts-node' src/server.ts",
     "test": "echo \"Error: no test specified\" && exit 1"
